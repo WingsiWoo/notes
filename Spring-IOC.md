@@ -13,6 +13,120 @@ Spring 的 IoC 设计支持以下功能：
 
 
 
+### 实现方式
+
+#### DL依赖查找——ApplicationContext
+
+即容器已经创建好了对象，当用户需要使用时要自己到容器中查找
+
+```java
+ApplicationContext applicationContext = new ClassPathXmlApplicationContext("/application-context.xml");
+Object bean = applicationContext.getBean("object");
+```
+
+- 优点：所有的Bean在系统启动时都已创建，可以在系统启动时就发现配置问题，运行速度快
+- 缺点：所有的Bean无论是否使用到都会被预加载到容器中，占用内存大，系统启动速度慢
+
+
+
+#### DI依赖注入——BeanFactory
+
+即用户只需要告诉容器当前需要的对象，容器就会自动将创建好的对象注入（赋值）
+
+|                 BeanFactory                 |       ApplicationContext       |
+| :-----------------------------------------: | :----------------------------: |
+|                   懒加载                    |            即时加载            |
+|          使用语法显式提供资源对象           |       自己创建和管理对象       |
+| 不支持国际化（没有扩展MessageResource接口） | 支持国际化，具有消息处理的功能 |
+|            不支持基于依赖的注解             |       支持基于依赖的注解       |
+
+- 优点：应用启动时占用资源少，适用于对资源要求较高的应用
+- 缺点：运行速度相对来说比较慢，可能会出现NPE（注入失败），通过BeanFactory创建的Bean生命周期会比较简单
+
+
+
+### 注入方式
+
+#### 构造器注入
+
+```java
+public class A {
+	private B b;
+	public A(B b) {
+		this.b = b;
+	}
+}
+```
+
+#### setter注入
+
+```java
+public class A {
+  public void setB(B b) {
+    this.b = b;
+  }
+}
+```
+
+> 还有一种接口注入的方式，但是因为要求调用者必须实现一个指定的接口，因此很少使用
+
+#### 对比
+
+|         构造器注入         |        setter注入        |
+| :------------------------: | :----------------------: |
+|         无部分注入         |        有部分注入        |
+|     不会覆盖setter属性     |     会覆盖setter属性     |
+| 任何修改都会创建一个新实例 | 任何修改都不会创建新实例 |
+|      适合注入多个对象      |     适合注入少量对象     |
+
+#### 属性注入
+
+```java
+public class A {
+	@Autowired/@Resource(name = "实现类名")
+	private B b;
+}
+```
+
+
+
+### 循环依赖
+
+<img src="https://img2018.cnblogs.com/blog/1162587/201901/1162587-20190108224120891-308387799.png" alt="img" style="zoom:50%;" />
+
+1. 构造器方式注入**（无法解决）**
+
+   即A类所依赖的B类作为构造器参数传入，BC，AC之间同理。
+
+   Spring会将正在创建的`bean`放在一个“当前创建bean”的池中，如果在创建`bean`的时候发现自己已经在这个池中就会抛出`BeanCurrentlyInCreationException`异常表示发生了循环依赖，创建完毕的`bean`将从该池清除。
+
+   > 首先创建A类，把其放入池中，然后发现A依赖B，因此要去创建B，把B放入池中
+   >
+   > 创建B过程中发现B依赖C，创建C，把C放入池中
+   >
+   > 创建C过程中发现C依赖A，但是A已经在池中，因此说明发生了循环依赖，抛出异常
+   >
+   > ==即在调用构造器完成实例化之前，一二三级缓存中都没有该对象的信息，因此无法解决构造器循环依赖==
+
+2. `Setter`方式注入-单例（默认）
+
+   `Spring`先是用构造实例化`Bean`对象 ，此时`Spring`会将这个实例化结束的对象放到一个`Map`中，并且`Spring`提供了获取这个未设置属性的实例化对象引用的方法。
+
+   > 1. 先初始化A把其放入`singletonFactories`中，发现其依赖B，去创建B
+   > 2. 同理，把B放入`singletonFactories`中，去创建C
+   > 3. 把C放入`singletonFactories`中，发现其依赖A，从一级缓存中逐级向下查找，在`singletonFactories`三级缓存中找到A的半成品，提前暴露引用给C，并把A移入二级缓存`earlySingletonObjects`
+   > 4. 至此，C创建完毕，返回到B，再返回到A
+
+3. `Setter`方式注入-原型**（无法解决）**
+
+   `scope="prototype"` 意思是**每次请求都会创建一个实例对象**。两者的区别是：有状态的`bean`都使用 `prototype` 作用域，无状态的一般都使用`singleton`单例作用域。
+
+   如果是原型模式会报错：对于“`prototype`”作用域`Bean`，`Spring`容器无法完成依赖注入，因为“`prototype`”作用域的`Bean`，`Spring`容器不进行缓存，因此无法提前暴露一个创建中的`Bean`。
+
+   > ==多实例Bean是每次创建都会调用doGetBean方法，根本没有使用一二三级缓存，肯定不能解决循环依赖。==
+
+
+
 ### 容器
 
 容器管理着`Bean`的生命周期，控制着`Bean`的依赖注入。
@@ -58,35 +172,14 @@ Spring 的 IoC 设计支持以下功能：
 
 
 
-### 循环依赖
+### 创建单例对象过程
 
-<img src="https://img2018.cnblogs.com/blog/1162587/201901/1162587-20190108224120891-308387799.png" alt="img" style="zoom:50%;" />
+1. `createBeanInstance`：调用对象的构造方法实例化对象➡️三级缓存`singletonFactories`
+2. `populateBean`：填充属性➡️二级缓存`earlySingletonObjects`
 
-1. 构造器方式注入**（无法解决）**
+> 循环依赖主要发生在以上两步
 
-   即A类所依赖的B类作为构造器参数传入，BC，AC之间同理。
-
-   Spring会将正在创建的`bean`放在一个“当前创建bean”的池中，如果在创建`bean`的时候发现自己已经在这个池中就会抛出`BeanCurrentlyInCreationException`异常表示发生了循环依赖，创建完毕的`bean`将从该池清除。
-
-   > 首先创建A类，把其放入池中，然后发现A依赖B，因此要去创建B，把B放入池中
-   >
-   > 创建B过程中发现B依赖C，创建C，把C放入池中
-   >
-   > 创建C过程中发现C依赖A，但是A已经在池中，因此说明发生了循环依赖，抛出异常
-
-2. `Setter`方式注入-单例（默认）
-
-   `Spring`先是用构造实例化`Bean`对象 ，此时`Spring`会将这个实例化结束的对象放到一个`Map`中，并且`Spring`提供了获取这个未设置属性的实例化对象引用的方法。
-
-   > 先实例化ABC并放入*Map*中，然后初始化A的属性，发现是依赖B，因此会去*Map*中取出B的单例对象。
-   >
-   > 因此不会出现异常
-
-3. `Setter`方式注入-原型**（无法解决）**
-
-   `scope="prototype"` 意思是 每次请求都会创建一个实例对象。两者的区别是：有状态的`bean`都使用 `prototype` 作用域，无状态的一般都使用`singleton`单例作用域。
-
-   如果是原型模式会报错：对于“`prototype`”作用域`Bean`，`Spring`容器无法完成依赖注入，因为“`prototype`”作用域的`Bean`，`Spring`容器不进行缓存，因此无法提前暴露一个创建中的`Bean`。
+3. `InitializeBean`：调用`spring xml`中的`init`方法➡️一级缓存`singletonObjects`
 
 
 
@@ -112,11 +205,11 @@ private final Map<String, Object> earlySingletonObjects = new ConcurrentHashMap<
 private final Map<String, ObjectFactory<?>> singletonFactories = new HashMap<>(16);
 ```
 
-> 一个Bean的创建，经历了 singletonFactories -> earlySingletonObjects -> singletonObjects的三个过程。三级缓存和二级缓存在创建bean的时候，即AbstractAutowireCapableBeanFactory.doCreateBean()方法中设置
+> 一个Bean的创建，经历了 **`singletonFactories -> earlySingletonObjects -> singletonObjects`**的三个过程。三级缓存和二级缓存在创建bean的时候，即`AbstractAutowireCapableBeanFactory.doCreateBean()`方法中设置
 >
-> 一级缓存在获取Bean，即AbstractBeanFactory.doGetBean()方法中设置
+> 一级缓存在获取Bean，即`AbstractBeanFactory.doGetBean()`方法中设置
 >
-> 单例对象先实例化存放于singletonFactories中，之后又存放于earlySingletonObjects中，最后完成后存放于singletonObjects中
+> 单例对象先实例化存放于`singletonFactories`中，之后又存放于`earlySingletonObjects`中，最后完成后存放于`singletonObjects`中
 
 
 
@@ -132,9 +225,9 @@ boolean earlySingletonExposure = (mbd.isSingleton() && this.allowCircularReferen
 
 #### 放入三级缓存
 
-doGetBean()方法调用getEarlyBeanReference()获取到objectFactory对象，再把该对象作为参数传入到addSingletonFactory()方法放入三级缓存（beanName为key，objectFactory为value）
+`doGetBean()`方法调用`getEarlyBeanReference()`获取到`objectFactory`对象，再把该对象作为参数传入到`addSingletonFactory()`方法放入三级缓存（`beanName`为`key`，`objectFactory`为`value`）
 
-> getEarlyBeanReference()方法返回早期对象，用于将来升级到二级缓存: 要么返回原Object，要么返回执行了AbstractAutoProxyCreator.getEarlyBeanReference获取加强后的Object代理对象。
+> `getEarlyBeanReference()`方法返回早期对象，用于将来升级到二级缓存: 要么返回原`Object`，要么返回执行了`AbstractAutoProxyCreator.getEarlyBeanReference`获取加强后的`Object`代理对象。
 
 ```java
 protected void addSingletonFactory(String beanName, ObjectFactory<?> singletonFactory) {
@@ -157,7 +250,7 @@ protected void addSingletonFactory(String beanName, ObjectFactory<?> singletonFa
 
 #### 放入二级缓存
 
-doGetBean()方法调用getSingleton()方法移除三级缓存中的bean，放入到二级缓存中
+`doGetBean()`方法调用`getSingleton()`方法移除三级缓存中的bean，放入到二级缓存中
 
 ```java
 protected Object getSingleton(String beanName, boolean allowEarlyReference) {
