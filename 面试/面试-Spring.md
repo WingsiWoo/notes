@@ -1,5 +1,24 @@
 # 面试-Spring
 
+## 生命周期/IOC容器加载过程
+
+1. ==实例化==（Instantiation）
+2. ==属性赋值==（Populate）
+3. ==初始化==（Initialization）
+   1. 初始化前：
+      1. 检查 Aware 相关接口并设置相关依赖(BeanNameAware、BeanClassLoaderAware、BeanFactoryAware)
+      2. BeanPostProcessor 前置处理
+   2. 初始化中：
+      1. 若实现 InitializingBean 接口，调用 afterPropertiesSet() 方法
+      2. 若配置自定义的 init-method方法，则执行
+   3. 初始化后：
+      1. BeanPostProceesor 后置处理
+4. ==销毁==（Destruction）
+   1. 若实现 DisposableBean 接口，则执行 destory()方法
+   2. 若配置自定义的 detory-method 方法，则执行
+
+
+
 ## 什么是控制反转
 
 IOC是一种解耦的设计思想，它借助第三方实现具有依赖关系的对象之间的解耦。如对象A依赖对象B，没有引入IOC之前，对象A就需要自己去创建对象B（主动）；但是引入IOC之后，对象A向容器请求对象B即可，对象B的创建由容器来进行管理（被动），由主动转换为被动，实现了控制权反转
@@ -68,6 +87,26 @@ A依赖B，B依赖A，Spring是怎么解决循环依赖的？
 6. B创建完成后，A也可以继续走后续创建步骤了
 
 ![image-20220109142654878](https://tva1.sinaimg.cn/large/008i3skNgy1gy7ekg7t6jj30kd08i760.jpg)
+
+
+
+### Q：二级缓存就可以解决循环依赖问题，那么为什么`Spring`还要采用三级缓存？
+
+A：初始的`Spring`是没有解决循环引用问题的，设计的原则是**bean实例化->属性设置->初始化->生成aop对象**。
+
+如果不采用三级缓存的话，生成`aop`对象的这个阶段就要提前到实例化的阶段执行，也就是说所有的`bean`在创建过程中都会先生成代理对象再设置属性等其他工作。
+
+但是这样做的话，就与`Spring`的`aop`的设计原则相驳：`aop`的实现需要与`bean`的正常生命周期分离。因此，`Spring`选择再增加一级缓存，当发生循环依赖时，就触发代理类的生成，并把代理类存入一级缓存（`singletonObjects`）
+
+> 去掉三级缓存之后，Bean 直接创建 `earlySingletonObjects`， 看着好像也可以。
+>
+> 如果有代理的时候，在 `earlySingletonObjects` 直接放代理对象就行了。
+>
+> 但是会导致一个问题：在实例化阶段就得执行后置处理器，判断有 `AnnotationAwareAspectJAutoProxyCreator` 并创建代理对象。
+>
+> 这么一想，是不是会对 Bean 的生命周期有影响。
+>
+> 同样，先创建 `singletonFactory` 的好处就是：在真正需要实例化的时候，再使用 `singletonFactory.getObject()` 获取 `Bean` 或者 `Bean` 的代理。相当于是延迟实例化。
 
 
 

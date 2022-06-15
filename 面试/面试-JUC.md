@@ -178,13 +178,13 @@
 
 
 
-## 什么是this引用逃逸？
-
-https://www.cnblogs.com/jian0110/p/9369096.html
+### 阻塞队列
 
 
 
 
+
+## Java15为什么默认禁用偏向锁
 
 
 
